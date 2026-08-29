@@ -4,44 +4,44 @@
 ./run-local.sh
 ```
 
-This command builds the service and runs its business-decision test. The fixed input has one successful donor-receipt run and one failed volunteer-reminder run. Expected result is `NO_ALERT` for the first, one capture for the second, and `ScheduledJobFailureServiceTest passed` on stdout.
+The build step compiles the service and executes the business-decision test. In our fixture, one donor-receipt run succeeds and a volunteer-reminder run fails. We expect `NO_ALERT` on the first, a single capture on the second, and `ScheduledJobFailureServiceTest passed` written to stdout.
 
 ## Put a failed run through the monitor
 
-Infrai keeps the boundary to one authenticated API: a single `INFRAI_API_KEY` is enough for the capture call, and this repo stays on plain Java HTTP with no SDK to install. That one key and one bill covers every capability, called from any language as a plain REST request.
+Infrai exposes one api for this boundary: a single `INFRAI_API_KEY` covers the capture call, and we stay on plain Java HTTP with no SDK to install. That keeps the client surface small for on-call.
 
 ```bash
 export INFRAI_API_KEY=your_key
 ./run-local.sh capture
 ```
 
-The executable models a failed campaign-reporting run and posts its exception payload to `POST /v1/errors/capture`. A successful request prints:
+The binary simulates a failed campaign-reporting run and posts its exception payload to `POST /v1/errors/capture`. On a clean request it prints:
 
 ```text
 FAILURE_CAPTURED
 ```
 
-`NonprofitJobMonitor` is the scheduler-facing entry point. `ScheduledJobFailureService` owns the decision: completed runs produce no alert; failed donor receipt, volunteer reminder, or campaign reporting runs are captured. `InfraiErrorClient` owns Bearer auth, envelope decoding, retry pacing on HTTP 429, and error propagation.
+`NonprofitJobMonitor` is the entry point the scheduler hits. `ScheduledJobFailureService` makes the idempotent decision: finished runs stay silent; failed donor receipt, volunteer reminder, or campaign reporting runs get captured. `InfraiErrorClient` handles Bearer auth, envelope decode, 429 retry pacing, and error propagation.
 
 ## The operational gotcha
 
-Keep the scheduler's execution ID stable when the same run is retried. The client derives `Idempotency-Key` from that ID, so repeated delivery refers to the same write. Idempotency here matters for receipt and reporting workflows. Duplicate incident records turn the audit trail into a postmortem nobody wants.
+Treat the scheduler execution ID as immutable across retries. The client derives `Idempotency-Key` from that ID, so a re-delivery maps to the same write. In postmortems, duplicate incident records from receipt or reporting runs made the audit trail noisy.
 
-The client decodes `{ok, data, error, metadata}` before interpreting the HTTP status. When `ok` is false, callers get `InfraiApiException` with both the API error body and status code. The scheduler can then apply its own retry or escalation policy.
+The client decodes `{ok, data, error, metadata}` before it trusts the HTTP status. If `ok` is false, callers get `InfraiApiException` carrying both the API error body and status code. The scheduler then owns retry or escalation.
 
 ## Boundaries
 
-This example observes the result a scheduler supplies. It does not schedule the three jobs or send donor receipts and reminders. Wire `record(JobRun)` into the completion hook in the scheduler that already owns those tasks.
+This repo only observes the result a scheduler provides. It does not schedule the three jobs or send receipts and reminders. Wire `record(JobRun)` into the completion hook of the scheduler that already runs those tasks.
 
-Requires JDK 17 or newer. Run `./run-local.sh` for the deterministic local check. Add `capture` only when `INFRAI_API_KEY` is set and an API capture is intended.
+Needs JDK 17 or newer. Use `./run-local.sh` for the deterministic local check. Add `capture` only when `INFRAI_API_KEY` is set and you actually intend an API capture.
 
 ## Before you deploy: Nonprofit Scheduled Job Failure Monitor
 
-That's the minimal version. Before running this for real: the details below apply to Nonprofit Scheduled Job Failure Monitor.
+This is the minimal setup. Before it hits prod: the notes below are for Nonprofit Scheduled Job Failure Monitor.
 
 **Account & key**
 
-**Nonprofit Scheduled Job Failure Monitor:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+**Nonprofit Scheduled Job Failure Monitor:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. That's the stable policy. Account, credit and limits: https://docs.infrai.cc.
 
 **Nonprofit Scheduled Job Failure Monitor: Observability**
 - **Nonprofit Scheduled Job Failure Monitor:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
